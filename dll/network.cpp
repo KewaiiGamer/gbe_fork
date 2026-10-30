@@ -18,6 +18,28 @@
 #include "dll/network.h"
 #include "dll/dll.h"
 
+#include <cstdlib>
+#include <cstdarg>
+#include <cstdio>
+#include <fstream>
+
+// Env-gated relay diagnostics: set environment variable GBE_RELAY_LOG=1 before
+// launching the game to append relay events to STEAM_RELAY.log in the working
+// directory. Off by default; zero overhead when disabled.
+static void relay_log(const char *fmt, ...)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = std::getenv("GBE_RELAY_LOG");
+        enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    if (!enabled) return;
+    char buf[512];
+    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    std::ofstream f("STEAM_RELAY.log", std::ios::app);
+    if (f) f << buf << "\n";
+}
+
 #define MAX_BROADCASTS 16
 static int number_broadcasts = -1;
 static IP_PORT broadcasts[MAX_BROADCASTS];
@@ -519,6 +541,8 @@ void Networking::do_callbacks_message(Common_Message *msg)
         CSteamID dest_relay_id((uint64)msg->dest_id());
         if (std::find(ids.begin(), ids.end(), dest_relay_id) == ids.end()) {
             Connection *dconn = find_connection(dest_relay_id, this->appid);
+            relay_log("relay FWD dest=%llu dest_known=%d relayed=%d",
+                (unsigned long long)msg->dest_id(), dconn != NULL ? 1 : 0, msg->relayed() ? 1 : 0);
             if (dconn) {
                 sendTo(msg, true, dconn);
             }
@@ -1249,12 +1273,18 @@ bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)
         }
     }
 
-    // Host-relay fallback: the destination peer is not directly reachable
-    // (typically another client behind NAT - we never opened a path to it).
-    // Forward the message via a reachable peer (the host), which will
-    // re-dispatch it to the destination in do_callbacks_message(). Guard with
-    // the relayed flag so a relayed carrier is never relayed a second time.
-    if (!ret && conn && msg->dest_id() && !msg->relayed()) {
+    // Host-relay fallback: the destination peer is not directly reachable.
+    // This covers two cases:
+    //   1. We have a connection for the destination but it's unreachable
+    //      (another client behind NAT - we never opened a path to it).
+    //   2. We have NO connection for the destination yet (e.g. the connect-time
+    //      CONNECTION_REQUEST fires before gossip taught us this peer). conn is
+    //      NULL here, so without this the first handshake packet is dropped and
+    //      the connection never establishes.
+    // In both cases, forward via a reachable peer (the host), which knows the
+    // destination and re-dispatches it in do_callbacks_message(). The relayed
+    // flag prevents a relayed carrier from being relayed a second time.
+    if (!ret && msg->dest_id() && !msg->relayed()) {
         Common_Message relay = *msg;
         relay.set_relayed(true);
         size_t rsize = relay.ByteSizeLong();
@@ -1272,8 +1302,12 @@ bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)
                 continue; // this peer isn't reachable either, try the next
             }
             ret = true;
+            relay_log("relay OUT dest=%llu dest_conn_known=%d via=%llu",
+                (unsigned long long)msg->dest_id(), conn != NULL ? 1 : 0,
+                c.ids.empty() ? 0ULL : (unsigned long long)c.ids[0].ConvertToUint64());
             break; // one relay carrier (the host) is enough
         }
+        if (!ret) relay_log("relay FAIL dest=%llu no reachable carrier", (unsigned long long)msg->dest_id());
     }
 
     reset_last_error();
