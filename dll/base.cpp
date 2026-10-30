@@ -490,11 +490,10 @@ int ( WINAPI *Real_WSAConnect )( SOCKET s, const sockaddr *addr, int namelen, LP
 static int WINAPI Mine_SendTo( SOCKET s, const char *buf, int len, int flags, const sockaddr *to, int tolen)
 {
     PRINT_DEBUG_ENTRY();
-    if (is_lan_ip(to, tolen)) {
-        return Real_SendTo( s, buf, len, flags, to, tolen );
-    } else {
-        return len;
-    }
+    // PATCH: always let UDP sends through (enables custom_broadcasts to public IPs).
+    // Keep Mine_Connect / Mine_WinHttpConnect hooks intact so the game's HTTP
+    // demo-check to the publisher remains blocked -> ban_seen.cfg is never written.
+    return Real_SendTo( s, buf, len, flags, to, tolen );
 }
 
 static int WINAPI Mine_Connect( SOCKET s, const sockaddr *addr, int namelen )
