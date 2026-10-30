@@ -1406,6 +1406,17 @@ void Steam_Matchmaking::RunCallbacks()
 {
     run_background();
 
+    // Keep the network relay hub pointed at the owner of the lobby we are in,
+    // so peer<->peer traffic that can't go direct is relayed through the host
+    // (the only node every member can reach), not an arbitrary reachable peer.
+    for (auto &l : lobbies) {
+        if (l.deleted()) continue;
+        if (get_lobby_member(&l, settings->get_local_steam_id())) {
+            network->set_relay_hub(CSteamID((uint64)l.owner()));
+            break;
+        }
+    }
+
     if (searching) {
         PRINT_DEBUG("for lobbies %zu", lobbies.size());
         for(auto & l: lobbies) {

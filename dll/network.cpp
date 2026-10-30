@@ -1200,6 +1200,11 @@ void Networking::setAppID(uint32 appid)
     this->appid = appid;
 }
 
+void Networking::set_relay_hub(CSteamID id)
+{
+    relay_hub = id;
+}
+
 bool Networking::sendToIPPort(Common_Message *msg, uint32 ip, uint16 port, bool reliable)
 {
     bool is_local_ip = ((ip >> 24) == 0x7F);
@@ -1289,29 +1294,43 @@ bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)
     // destination and re-dispatches it in do_callbacks_message(). The relayed
     // flag prevents a relayed carrier from being relayed a second time.
     if (!ret && msg->dest_id() && !msg->relayed()) {
-        Common_Message relay = *msg;
-        relay.set_relayed(true);
-        size_t rsize = relay.ByteSizeLong();
-        for (auto &c : connections) {
-            if (&c == conn) continue;
-            if (c.tcp_socket_incoming.received_data) {
-                send_buffer_tcp(c.tcp_socket_incoming, &relay);
-            } else if (c.tcp_socket_outgoing.received_data) {
-                send_buffer_tcp(c.tcp_socket_outgoing, &relay);
-            } else if (c.udp_pinged) {
-                std::vector<char> rbuf(rsize, 0);
-                relay.SerializeToArray(&rbuf[0], static_cast<int>(rsize));
-                send_packet_to(udp_socket, c.udp_ip_port, &rbuf[0], static_cast<unsigned long>(rsize));
+        // Relay ONLY through the lobby owner (host) - the single node every
+        // member can reach. Relaying via an arbitrary reachable peer is wrong:
+        // a LAN peer cannot reach an internet peer, so that hop silently dies.
+        bool i_am_hub = relay_hub.IsValid() &&
+            std::find(ids.begin(), ids.end(), relay_hub) != ids.end();
+        if (i_am_hub) {
+            // We are the hub; we reach peers directly. If the direct send above
+            // failed (transient, e.g. handshake not pinged yet), drop and let
+            // it retry rather than bouncing off another peer.
+            relay_log("relay SKIP (self is hub) dest=%llu", (unsigned long long)msg->dest_id());
+        } else if (!relay_hub.IsValid()) {
+            relay_log("relay FAIL dest=%llu no hub set yet", (unsigned long long)msg->dest_id());
+        } else {
+            Connection *hub = find_connection(relay_hub, this->appid);
+            if (hub && hub != conn) {
+                Common_Message relay = *msg;
+                relay.set_relayed(true);
+                size_t rsize = relay.ByteSizeLong();
+                if (hub->tcp_socket_incoming.received_data) {
+                    send_buffer_tcp(hub->tcp_socket_incoming, &relay);
+                    ret = true;
+                } else if (hub->tcp_socket_outgoing.received_data) {
+                    send_buffer_tcp(hub->tcp_socket_outgoing, &relay);
+                    ret = true;
+                } else if (hub->udp_pinged) {
+                    std::vector<char> rbuf(rsize, 0);
+                    relay.SerializeToArray(&rbuf[0], static_cast<int>(rsize));
+                    send_packet_to(udp_socket, hub->udp_ip_port, &rbuf[0], static_cast<unsigned long>(rsize));
+                    ret = true;
+                }
+                relay_log("relay OUT dest=%llu via HUB=%llu ok=%d",
+                    (unsigned long long)msg->dest_id(),
+                    (unsigned long long)relay_hub.ConvertToUint64(), ret ? 1 : 0);
             } else {
-                continue; // this peer isn't reachable either, try the next
+                relay_log("relay FAIL dest=%llu hub conn missing", (unsigned long long)msg->dest_id());
             }
-            ret = true;
-            relay_log("relay OUT dest=%llu dest_conn_known=%d via=%llu",
-                (unsigned long long)msg->dest_id(), conn != NULL ? 1 : 0,
-                c.ids.empty() ? 0ULL : (unsigned long long)c.ids[0].ConvertToUint64());
-            break; // one relay carrier (the host) is enough
         }
-        if (!ret) relay_log("relay FAIL dest=%llu no reachable carrier", (unsigned long long)msg->dest_id());
     }
 
     reset_last_error();

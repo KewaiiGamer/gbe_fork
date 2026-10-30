@@ -111,6 +111,10 @@ class Networking
     std::chrono::high_resolution_clock::time_point last_broadcast;
     std::vector<IP_PORT> custom_broadcasts;
 
+    // Host-relay: the lobby owner, the only node reachable by every member.
+    // Peer<->peer traffic that can't go direct is relayed through this node.
+    CSteamID relay_hub{};
+
     std::vector<struct TCP_Socket> accepted;
     std::recursive_mutex mutex;
 
@@ -143,6 +147,7 @@ public:
     
     void addListenId(CSteamID id);
     void setAppID(uint32 appid);
+    void set_relay_hub(CSteamID id);
     void Run();
 
     // send to a specific user, set_dest_id() must be called
