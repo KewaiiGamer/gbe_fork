@@ -37,7 +37,9 @@ static void relay_log(const char *fmt, ...)
     if (!enabled) return;
     char buf[512];
     va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
-    std::ofstream f("STEAM_RELAY.log", std::ios::app);
+    // Absolute path next to the emulator so it is always findable regardless of
+    // the process working directory.
+    std::ofstream f(get_full_program_path() + "STEAM_RELAY.log", std::ios::app);
     if (f) f << buf << "\n";
 }
 
