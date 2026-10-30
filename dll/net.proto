@@ -423,6 +423,10 @@ message Common_Message {
 
     uint32 source_ip = 128;
     uint32 source_port = 129;
+
+    // Host-relay: set when this message has already been forwarded once by a
+    // relay peer, to prevent relay loops.
+    bool relayed = 130;
 }
 
 //Non networking related protobufs

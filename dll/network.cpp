@@ -511,6 +511,21 @@ std::set<IP_PORT> Networking::resolve_ip(std::string dns)
 
 void Networking::do_callbacks_message(Common_Message *msg)
 {
+    // Host-relay: a message addressed to another peer arrived here because we
+    // are the reachable relay (e.g. the lobby host). Forward it once to the
+    // real destination and do not process it locally. The relayed flag on the
+    // carrier prevents a relayed message from being relayed again.
+    if (msg->dest_id()) {
+        CSteamID dest_relay_id((uint64)msg->dest_id());
+        if (std::find(ids.begin(), ids.end(), dest_relay_id) == ids.end()) {
+            Connection *dconn = find_connection(dest_relay_id, this->appid);
+            if (dconn) {
+                sendTo(msg, true, dconn);
+            }
+            return;
+        }
+    }
+
     if (msg->has_network() || msg->has_network_old()) {
         PRINT_DEBUG("has_network");
         run_callbacks(CALLBACK_ID_NETWORKING, msg);
@@ -1231,6 +1246,33 @@ bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)
             msg->SerializeToArray(&buffer[0], static_cast<int>(size));
             send_packet_to(udp_socket, conn->udp_ip_port, &buffer[0], static_cast<unsigned long>(size));
             ret = true;
+        }
+    }
+
+    // Host-relay fallback: the destination peer is not directly reachable
+    // (typically another client behind NAT - we never opened a path to it).
+    // Forward the message via a reachable peer (the host), which will
+    // re-dispatch it to the destination in do_callbacks_message(). Guard with
+    // the relayed flag so a relayed carrier is never relayed a second time.
+    if (!ret && conn && msg->dest_id() && !msg->relayed()) {
+        Common_Message relay = *msg;
+        relay.set_relayed(true);
+        size_t rsize = relay.ByteSizeLong();
+        for (auto &c : connections) {
+            if (&c == conn) continue;
+            if (c.tcp_socket_incoming.received_data) {
+                send_buffer_tcp(c.tcp_socket_incoming, &relay);
+            } else if (c.tcp_socket_outgoing.received_data) {
+                send_buffer_tcp(c.tcp_socket_outgoing, &relay);
+            } else if (c.udp_pinged) {
+                std::vector<char> rbuf(rsize, 0);
+                relay.SerializeToArray(&rbuf[0], static_cast<int>(rsize));
+                send_packet_to(udp_socket, c.udp_ip_port, &rbuf[0], static_cast<unsigned long>(rsize));
+            } else {
+                continue; // this peer isn't reachable either, try the next
+            }
+            ret = true;
+            break; // one relay carrier (the host) is enough
         }
     }
 
