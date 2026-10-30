@@ -30,8 +30,9 @@ static void relay_log(const char *fmt, ...)
 {
     static int enabled = -1;
     if (enabled < 0) {
+        // On by default; set GBE_RELAY_LOG=0 to disable.
         const char *e = std::getenv("GBE_RELAY_LOG");
-        enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
+        enabled = (e && e[0] == '0') ? 0 : 1;
     }
     if (!enabled) return;
     char buf[512];
@@ -541,8 +542,9 @@ void Networking::do_callbacks_message(Common_Message *msg)
         CSteamID dest_relay_id((uint64)msg->dest_id());
         if (std::find(ids.begin(), ids.end(), dest_relay_id) == ids.end()) {
             Connection *dconn = find_connection(dest_relay_id, this->appid);
-            relay_log("relay FWD dest=%llu dest_known=%d relayed=%d",
-                (unsigned long long)msg->dest_id(), dconn != NULL ? 1 : 0, msg->relayed() ? 1 : 0);
+            relay_log("relay FWD src=%llu dest=%llu dest_known=%d relayed=%d",
+                (unsigned long long)msg->source_id(), (unsigned long long)msg->dest_id(),
+                dconn != NULL ? 1 : 0, msg->relayed() ? 1 : 0);
             if (dconn) {
                 sendTo(msg, true, dconn);
             }
